@@ -1,0 +1,6 @@
+name: CI/CD
+on: [push, pull_request]
+jobs:
+  pipeline:
+    uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@master
+    secrets: inherit

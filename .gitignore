@@ -1,0 +1,7 @@
+plans/
+docs/
+.claude/
+.env
+.env.*
+!.env.example
+*.local

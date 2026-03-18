@@ -1,0 +1,48 @@
+name: Detect Language and Project Config
+description: Auto-detects project language from lockfiles/manifests and checks for Dockerfile
+
+outputs:
+  language:
+    description: Detected language (node, java, go, python, php, rust, unknown)
+    value: ${{ steps.detect-language.outputs.language }}
+  has_dockerfile:
+    description: Whether a Dockerfile exists
+    value: ${{ steps.detect-dockerfile.outputs.has_dockerfile }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect project language from manifest files
+      id: detect-language
+      shell: bash
+      run: |
+        LANGUAGE="unknown"
+
+        if [ -f "package.json" ]; then
+          LANGUAGE="node"
+        elif [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+          LANGUAGE="java"
+        elif [ -f "go.mod" ]; then
+          LANGUAGE="go"
+        elif [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "setup.py" ] || [ -f "Pipfile" ]; then
+          LANGUAGE="python"
+        elif [ -f "composer.json" ]; then
+          LANGUAGE="php"
+        elif [ -f "Cargo.toml" ]; then
+          LANGUAGE="rust"
+        fi
+
+        echo "language=${LANGUAGE}" >> $GITHUB_OUTPUT
+        echo "Detected language: ${LANGUAGE}"
+
+    - name: Check for Dockerfile presence
+      id: detect-dockerfile
+      shell: bash
+      run: |
+        if [ -f "Dockerfile" ] || [ -f "docker/Dockerfile" ] || [ -f ".docker/Dockerfile" ]; then
+          echo "has_dockerfile=true" >> $GITHUB_OUTPUT
+          echo "Dockerfile found"
+        else
+          echo "has_dockerfile=false" >> $GITHUB_OUTPUT
+          echo "No Dockerfile found"
+        fi

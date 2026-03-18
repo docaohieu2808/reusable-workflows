@@ -1,0 +1,18 @@
+# .ci.yml — place this file in your project root to configure deploy without editing your workflow file.
+# All fields are optional. Inputs passed directly to the reusable workflow take precedence over this file.
+
+deploy_target: "ssh-build"       # ssh-build | docker-compose | rsync | s3-cloudfront | k8s | helm | vercel | netlify | fly-io | railway
+deploy_host: "app.example.com"
+deploy_user: "ubuntu"
+deploy_path: "/var/www/myapp"
+deploy_port: "22"
+
+docker_registry: "ghcr.io"
+docker_image: "ghcr.io/myorg/myapp"
+
+k8s_namespace: "production"
+helm_chart: "./helm"
+helm_release: "myapp"
+
+s3_bucket: "my-static-site-bucket"
+cloudfront_id: "EXXXXXXXXXXXXX"

@@ -1,0 +1,380 @@
+name: Deploy to Configurable Target Environment
+description: Deploys to ssh-build, docker-compose, s3-cloudfront, rsync, k8s, helm, vercel, netlify, fly-io, railway, and more
+
+inputs:
+  deploy_target:
+    description: "Deploy target: ssh-build, docker-compose, s3-cloudfront, rsync, k8s, helm, vercel, netlify, fly-io, railway"
+    required: true
+  deploy_host:
+    description: SSH hostname or IP
+    required: false
+    default: ""
+  deploy_user:
+    description: SSH username
+    required: false
+    default: "deploy"
+  deploy_path:
+    description: Remote deployment path
+    required: false
+    default: "/var/www/app"
+  deploy_port:
+    description: SSH port
+    required: false
+    default: "22"
+  docker_image:
+    description: Full docker image reference (registry/name:tag)
+    required: false
+    default: ""
+  k8s_namespace:
+    description: Kubernetes namespace
+    required: false
+    default: "default"
+  helm_chart:
+    description: Helm chart path or name
+    required: false
+    default: "./helm"
+  helm_release:
+    description: Helm release name
+    required: false
+    default: "app"
+  s3_bucket:
+    description: S3 bucket name for s3-cloudfront target
+    required: false
+    default: ""
+  cloudfront_id:
+    description: CloudFront distribution ID
+    required: false
+    default: ""
+  language:
+    description: Detected project language (used to determine build output dir)
+    required: false
+    default: "unknown"
+  ref:
+    description: Git SHA or ref being deployed
+    required: false
+    default: ""
+  repository:
+    description: GitHub repository (owner/name)
+    required: false
+    default: ""
+
+# Secrets passed through from the caller workflow
+# GitHub composite actions cannot declare secrets, so they are read from env
+# The parent workflow must set them as environment variables before calling this action,
+# or pass them via the `secrets` map on the job level (secrets: inherit).
+# We use env vars with well-known names that secrets: inherit populates automatically.
+
+runs:
+  using: composite
+  steps:
+    # ── SSH setup (shared for ssh-build, docker-compose, rsync) ──────────────
+    - name: Setup SSH agent for remote targets
+      if: |
+        inputs.deploy_target == 'ssh-build' ||
+        inputs.deploy_target == 'docker-compose' ||
+        inputs.deploy_target == 'rsync'
+      uses: webfactory/ssh-agent@v0.9.0
+      with:
+        ssh-private-key: ${{ env.SSH_PRIVATE_KEY }}
+
+    - name: Add remote host to known_hosts
+      if: |
+        inputs.deploy_target == 'ssh-build' ||
+        inputs.deploy_target == 'docker-compose' ||
+        inputs.deploy_target == 'rsync'
+      shell: bash
+      run: |
+        mkdir -p ~/.ssh
+        if [ -n "$SSH_KNOWN_HOSTS" ]; then
+          echo "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+        elif [ -n "${{ inputs.deploy_host }}" ]; then
+          ssh-keyscan -p "${{ inputs.deploy_port }}" "${{ inputs.deploy_host }}" >> ~/.ssh/known_hosts 2>/dev/null
+        fi
+        chmod 600 ~/.ssh/known_hosts
+
+    # ── ssh-build: pull latest and rebuild on remote server ──────────────────
+    - name: Deploy via SSH remote build (git pull + restart)
+      if: inputs.deploy_target == 'ssh-build'
+      shell: bash
+      run: |
+        ssh -p "${{ inputs.deploy_port }}" \
+          -o StrictHostKeyChecking=accept-new \
+          "${{ inputs.deploy_user }}@${{ inputs.deploy_host }}" \
+          "set -e
+           cd '${{ inputs.deploy_path }}'
+           git fetch --all
+           git reset --hard origin/\$(git rev-parse --abbrev-ref HEAD)
+           if [ -f '.env.production' ]; then cp .env.production .env; fi
+           if [ -f 'package.json' ]; then
+             npm ci --prefer-offline && npm run build --if-present
+             pm2 restart all 2>/dev/null || npm start &
+           elif [ -f 'pom.xml' ]; then
+             mvn -B package -DskipTests --no-transfer-progress
+             sudo systemctl restart app 2>/dev/null || true
+           elif [ -f 'go.mod' ]; then
+             go build -o ./bin/app ./...
+             sudo systemctl restart app 2>/dev/null || true
+           elif [ -f 'requirements.txt' ]; then
+             pip install -r requirements.txt
+             sudo systemctl restart app 2>/dev/null || true
+           fi
+           echo 'Deployment complete'"
+
+    # ── docker-compose: pull new image and up on remote server ───────────────
+    - name: Deploy via Docker Compose on remote server
+      if: inputs.deploy_target == 'docker-compose'
+      shell: bash
+      run: |
+        ssh -p "${{ inputs.deploy_port }}" \
+          -o StrictHostKeyChecking=accept-new \
+          "${{ inputs.deploy_user }}@${{ inputs.deploy_host }}" \
+          "set -e
+           cd '${{ inputs.deploy_path }}'
+           echo '${{ env.DOCKER_PASSWORD }}' | docker login '${{ env.DOCKER_REGISTRY }}' \
+             -u '${{ env.DOCKER_USERNAME }}' --password-stdin 2>/dev/null || true
+           export IMAGE_TAG='${{ inputs.ref }}'
+           export DOCKER_IMAGE='${{ inputs.docker_image }}'
+           docker compose pull
+           docker compose up -d --remove-orphans
+           docker image prune -f
+           echo 'docker-compose deployment complete'"
+
+    # ── rsync: sync build output to remote server ─────────────────────────────
+    - name: Determine build output directory for rsync
+      if: inputs.deploy_target == 'rsync'
+      id: rsync-src
+      shell: bash
+      run: |
+        for dir in dist build out public .next; do
+          if [ -d "$dir" ]; then
+            echo "src=${dir}/" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        done
+        echo "src=./" >> $GITHUB_OUTPUT
+
+    - name: Deploy via rsync to remote server
+      if: inputs.deploy_target == 'rsync'
+      shell: bash
+      run: |
+        rsync -avz --delete \
+          -e "ssh -p ${{ inputs.deploy_port }} -o StrictHostKeyChecking=accept-new" \
+          --exclude='.git' \
+          --exclude='node_modules' \
+          --exclude='.env' \
+          "${{ steps.rsync-src.outputs.src }}" \
+          "${{ inputs.deploy_user }}@${{ inputs.deploy_host }}:${{ inputs.deploy_path }}/"
+
+    # ── s3-cloudfront: sync static assets and invalidate CDN ─────────────────
+    - name: Configure AWS credentials for S3/CloudFront
+      if: inputs.deploy_target == 's3-cloudfront'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION || 'us-east-1' }}
+
+    - name: Determine static output directory for S3 sync
+      if: inputs.deploy_target == 's3-cloudfront'
+      id: s3-src
+      shell: bash
+      run: |
+        for dir in dist build out public .next/static; do
+          if [ -d "$dir" ]; then
+            echo "src=${dir}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        done
+        echo "src=dist" >> $GITHUB_OUTPUT
+
+    - name: Sync files to S3 bucket
+      if: inputs.deploy_target == 's3-cloudfront'
+      shell: bash
+      run: |
+        aws s3 sync "${{ steps.s3-src.outputs.src }}/" \
+          "s3://${{ inputs.s3_bucket }}/" \
+          --delete \
+          --cache-control "public, max-age=31536000, immutable" \
+          --exclude "*.html" \
+          --exclude "*.json"
+        # HTML and JSON with short cache
+        aws s3 sync "${{ steps.s3-src.outputs.src }}/" \
+          "s3://${{ inputs.s3_bucket }}/" \
+          --exclude "*" \
+          --include "*.html" \
+          --include "*.json" \
+          --cache-control "public, max-age=0, must-revalidate"
+
+    - name: Invalidate CloudFront distribution cache
+      if: inputs.deploy_target == 's3-cloudfront' && inputs.cloudfront_id != ''
+      shell: bash
+      run: |
+        aws cloudfront create-invalidation \
+          --distribution-id "${{ inputs.cloudfront_id }}" \
+          --paths "/*"
+
+    # ── k8s: apply manifests or rolling restart ───────────────────────────────
+    - name: Configure kubectl from KUBECONFIG secret
+      if: inputs.deploy_target == 'k8s'
+      shell: bash
+      run: |
+        mkdir -p ~/.kube
+        echo "$KUBECONFIG" | base64 -d > ~/.kube/config 2>/dev/null || echo "$KUBECONFIG" > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Deploy to Kubernetes cluster
+      if: inputs.deploy_target == 'k8s'
+      shell: bash
+      run: |
+        NAMESPACE="${{ inputs.k8s_namespace }}"
+        IMAGE="${{ inputs.docker_image }}"
+
+        if [ -d "k8s" ] || [ -d "kubernetes" ]; then
+          MANIFEST_DIR=$([ -d "k8s" ] && echo "k8s" || echo "kubernetes")
+          # Substitute image tag in manifests
+          find "$MANIFEST_DIR" -name "*.yml" -o -name "*.yaml" | \
+            xargs sed -i "s|IMAGE_PLACEHOLDER|${IMAGE}|g" 2>/dev/null || true
+          kubectl apply -f "$MANIFEST_DIR/" -n "$NAMESPACE"
+          kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s
+        else
+          # Fallback: rolling restart all deployments
+          kubectl set image deployment \
+            $(kubectl get deployments -n "$NAMESPACE" -o name | head -1 | cut -d/ -f2) \
+            "*=${IMAGE}" \
+            -n "$NAMESPACE" 2>/dev/null || \
+          kubectl rollout restart deployment -n "$NAMESPACE"
+          kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s
+        fi
+
+    # ── helm: upgrade or install helm chart ──────────────────────────────────
+    - name: Configure kubectl for Helm deploy
+      if: inputs.deploy_target == 'helm'
+      shell: bash
+      run: |
+        mkdir -p ~/.kube
+        echo "$KUBECONFIG" | base64 -d > ~/.kube/config 2>/dev/null || echo "$KUBECONFIG" > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Install Helm CLI
+      if: inputs.deploy_target == 'helm'
+      uses: azure/setup-helm@v4
+
+    - name: Deploy via Helm upgrade --install
+      if: inputs.deploy_target == 'helm'
+      shell: bash
+      run: |
+        EXTRA_ARGS=""
+        if [ -f "helm/values.production.yaml" ]; then
+          EXTRA_ARGS="-f helm/values.production.yaml"
+        elif [ -f "helm/values.prod.yaml" ]; then
+          EXTRA_ARGS="-f helm/values.prod.yaml"
+        fi
+
+        helm upgrade --install \
+          "${{ inputs.helm_release }}" \
+          "${{ inputs.helm_chart }}" \
+          --namespace "${{ inputs.k8s_namespace }}" \
+          --create-namespace \
+          --set image.tag="${{ inputs.ref }}" \
+          --set image.repository="$(echo '${{ inputs.docker_image }}' | cut -d: -f1)" \
+          --atomic \
+          --timeout 300s \
+          $EXTRA_ARGS
+
+    # ── vercel: deploy to Vercel platform ────────────────────────────────────
+    - name: Install Vercel CLI
+      if: inputs.deploy_target == 'vercel'
+      shell: bash
+      run: npm install -g vercel@latest
+
+    - name: Deploy to Vercel
+      if: inputs.deploy_target == 'vercel'
+      shell: bash
+      run: |
+        PROD_FLAG=""
+        if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/master" ]; then
+          PROD_FLAG="--prod"
+        fi
+        vercel deploy $PROD_FLAG \
+          --token="${{ env.VERCEL_TOKEN }}" \
+          --yes \
+          ${VERCEL_ORG_ID:+--scope="$VERCEL_ORG_ID"} 2>/dev/null || \
+        vercel deploy $PROD_FLAG \
+          --token="${{ env.VERCEL_TOKEN }}" \
+          --yes
+
+    # ── netlify: deploy to Netlify platform ──────────────────────────────────
+    - name: Install Netlify CLI
+      if: inputs.deploy_target == 'netlify'
+      shell: bash
+      run: npm install -g netlify-cli@latest
+
+    - name: Determine Netlify publish directory
+      if: inputs.deploy_target == 'netlify'
+      id: netlify-dir
+      shell: bash
+      run: |
+        for dir in dist build out public .next; do
+          if [ -d "$dir" ]; then
+            echo "dir=${dir}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        done
+        echo "dir=dist" >> $GITHUB_OUTPUT
+
+    - name: Deploy to Netlify
+      if: inputs.deploy_target == 'netlify'
+      shell: bash
+      run: |
+        PROD_FLAG=""
+        if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/master" ]; then
+          PROD_FLAG="--prod"
+        fi
+        netlify deploy \
+          --dir="${{ steps.netlify-dir.outputs.dir }}" \
+          --site="${{ env.NETLIFY_SITE_ID }}" \
+          --auth="${{ env.NETLIFY_AUTH_TOKEN }}" \
+          $PROD_FLAG
+
+    # ── fly-io: deploy to Fly.io platform ────────────────────────────────────
+    - name: Install flyctl CLI
+      if: inputs.deploy_target == 'fly-io'
+      uses: superfly/flyctl-actions/setup-flyctl@master
+
+    - name: Deploy to Fly.io
+      if: inputs.deploy_target == 'fly-io'
+      shell: bash
+      env:
+        FLY_API_TOKEN: ${{ env.FLY_API_TOKEN }}
+      run: flyctl deploy --remote-only --strategy=rolling
+
+    # ── railway: deploy to Railway platform ──────────────────────────────────
+    - name: Install Railway CLI
+      if: inputs.deploy_target == 'railway'
+      shell: bash
+      run: npm install -g @railway/cli@latest
+
+    - name: Deploy to Railway
+      if: inputs.deploy_target == 'railway'
+      shell: bash
+      env:
+        RAILWAY_TOKEN: ${{ env.RAILWAY_TOKEN }}
+      run: railway up --detach
+
+    # ── unknown/unsupported target ────────────────────────────────────────────
+    - name: Warn on unknown deploy target
+      if: |
+        inputs.deploy_target != '' &&
+        inputs.deploy_target != 'ssh-build' &&
+        inputs.deploy_target != 'docker-compose' &&
+        inputs.deploy_target != 'rsync' &&
+        inputs.deploy_target != 's3-cloudfront' &&
+        inputs.deploy_target != 'k8s' &&
+        inputs.deploy_target != 'helm' &&
+        inputs.deploy_target != 'vercel' &&
+        inputs.deploy_target != 'netlify' &&
+        inputs.deploy_target != 'fly-io' &&
+        inputs.deploy_target != 'railway'
+      shell: bash
+      run: |
+        echo "::warning::Unknown deploy_target '${{ inputs.deploy_target }}'. Supported: ssh-build, docker-compose, s3-cloudfront, rsync, k8s, helm, vercel, netlify, fly-io, railway"

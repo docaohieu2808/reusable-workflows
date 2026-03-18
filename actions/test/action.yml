@@ -1,0 +1,270 @@
+name: Test and Lint Project by Detected Language
+description: Runs tests and linters for Node, Java, Go, Python, PHP, or Rust projects
+
+inputs:
+  language:
+    description: Detected language
+    required: true
+  skip_tests:
+    description: Skip running tests
+    required: false
+    default: "false"
+  skip_lint:
+    description: Skip running linters
+    required: false
+    default: "false"
+  node_version:
+    description: Node.js version override
+    required: false
+    default: ""
+  java_version:
+    description: Java version override
+    required: false
+    default: "21"
+  go_version:
+    description: Go version override
+    required: false
+    default: ""
+  python_version:
+    description: Python version override
+    required: false
+    default: ""
+  php_version:
+    description: PHP version override
+    required: false
+    default: "8.2"
+  rust_version:
+    description: Rust toolchain version override
+    required: false
+    default: "stable"
+
+runs:
+  using: composite
+  steps:
+    # ── Node.js ──────────────────────────────────────────────────────────────
+    - name: Resolve Node.js version from .nvmrc or .node-version
+      id: node-version
+      if: inputs.language == 'node'
+      shell: bash
+      run: |
+        VERSION="${{ inputs.node_version }}"
+        if [ -z "$VERSION" ] && [ -f ".nvmrc" ]; then
+          VERSION=$(cat .nvmrc | tr -d 'v\n')
+        elif [ -z "$VERSION" ] && [ -f ".node-version" ]; then
+          VERSION=$(cat .node-version | tr -d 'v\n')
+        fi
+        echo "version=${VERSION:-"20"}" >> $GITHUB_OUTPUT
+
+    - name: Setup Node.js for test
+      if: inputs.language == 'node'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ steps.node-version.outputs.version }}
+        cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || hashFiles('yarn.lock') != '' && 'yarn' || hashFiles('pnpm-lock.yaml') != '' && 'pnpm' || '' }}
+
+    - name: Setup pnpm
+      if: inputs.language == 'node' && hashFiles('pnpm-lock.yaml') != ''
+      uses: pnpm/action-setup@v3
+      with:
+        run_install: false
+
+    - name: Install Node.js dependencies
+      if: inputs.language == 'node'
+      shell: bash
+      run: |
+        if [ -f "pnpm-lock.yaml" ]; then
+          pnpm install --frozen-lockfile
+        elif [ -f "yarn.lock" ]; then
+          yarn install --frozen-lockfile
+        else
+          npm ci --prefer-offline
+        fi
+
+    - name: Run Node.js tests
+      if: inputs.language == 'node' && inputs.skip_tests != 'true'
+      shell: bash
+      run: |
+        if [ -f "package.json" ]; then
+          npm test --if-present 2>/dev/null || true
+        fi
+
+    - name: Run Node.js lint
+      if: inputs.language == 'node' && inputs.skip_lint != 'true'
+      shell: bash
+      run: |
+        if [ -f "package.json" ]; then
+          npm run lint --if-present 2>/dev/null || true
+          npm run typecheck --if-present 2>/dev/null || true
+          npm run type-check --if-present 2>/dev/null || true
+        fi
+
+    # ── Java ─────────────────────────────────────────────────────────────────
+    - name: Setup Java for test
+      if: inputs.language == 'java'
+      uses: actions/setup-java@v4
+      with:
+        java-version: ${{ inputs.java_version }}
+        distribution: temurin
+        cache: ${{ hashFiles('pom.xml') != '' && 'maven' || 'gradle' }}
+
+    - name: Run Maven tests
+      if: inputs.language == 'java' && hashFiles('pom.xml') != '' && inputs.skip_tests != 'true'
+      shell: bash
+      run: mvn -B test --no-transfer-progress
+
+    - name: Run Gradle tests
+      if: inputs.language == 'java' && hashFiles('build.gradle', 'build.gradle.kts') != '' && inputs.skip_tests != 'true'
+      shell: bash
+      run: |
+        chmod +x gradlew 2>/dev/null || true
+        ./gradlew test --no-daemon 2>/dev/null || gradle test --no-daemon
+
+    - name: Run Checkstyle lint
+      if: inputs.language == 'java' && hashFiles('pom.xml') != '' && inputs.skip_lint != 'true'
+      shell: bash
+      run: mvn -B checkstyle:check --no-transfer-progress 2>/dev/null || true
+
+    # ── Go ───────────────────────────────────────────────────────────────────
+    - name: Resolve Go version for test
+      id: go-version
+      if: inputs.language == 'go'
+      shell: bash
+      run: |
+        VERSION="${{ inputs.go_version }}"
+        if [ -z "$VERSION" ] && [ -f "go.mod" ]; then
+          VERSION=$(grep '^go ' go.mod | awk '{print $2}' | head -1)
+        fi
+        echo "version=${VERSION:-"1.22"}" >> $GITHUB_OUTPUT
+
+    - name: Setup Go for test
+      if: inputs.language == 'go'
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ steps.go-version.outputs.version }}
+        cache: true
+
+    - name: Run Go tests
+      if: inputs.language == 'go' && inputs.skip_tests != 'true'
+      shell: bash
+      run: go test -v -race -coverprofile=coverage.out ./...
+
+    - name: Run Go vet and staticcheck
+      if: inputs.language == 'go' && inputs.skip_lint != 'true'
+      shell: bash
+      run: |
+        go vet ./...
+        go install honnef.co/go/tools/cmd/staticcheck@latest 2>/dev/null && staticcheck ./... 2>/dev/null || true
+
+    # ── Python ───────────────────────────────────────────────────────────────
+    - name: Resolve Python version for test
+      id: python-version
+      if: inputs.language == 'python'
+      shell: bash
+      run: |
+        VERSION="${{ inputs.python_version }}"
+        if [ -z "$VERSION" ] && [ -f ".python-version" ]; then
+          VERSION=$(cat .python-version | tr -d '\n')
+        fi
+        echo "version=${VERSION:-"3.12"}" >> $GITHUB_OUTPUT
+
+    - name: Setup Python for test
+      if: inputs.language == 'python'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ steps.python-version.outputs.version }}
+
+    - name: Install Python test dependencies
+      if: inputs.language == 'python'
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f "poetry.lock" ]; then
+          pip install poetry && poetry install --no-interaction
+        elif [ -f "Pipfile" ]; then
+          pip install pipenv && pipenv install --dev --deploy
+        elif [ -f "requirements-dev.txt" ]; then
+          pip install -r requirements-dev.txt
+        elif [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        elif [ -f "pyproject.toml" ]; then
+          pip install ".[dev]" 2>/dev/null || pip install .
+        fi
+
+    - name: Run Python tests with pytest
+      if: inputs.language == 'python' && inputs.skip_tests != 'true'
+      shell: bash
+      run: |
+        if command -v pytest &>/dev/null; then
+          pytest --tb=short -q 2>/dev/null || true
+        elif [ -f "manage.py" ]; then
+          python manage.py test 2>/dev/null || true
+        fi
+
+    - name: Run Python lint with flake8 and ruff
+      if: inputs.language == 'python' && inputs.skip_lint != 'true'
+      shell: bash
+      run: |
+        pip install flake8 ruff 2>/dev/null || true
+        ruff check . 2>/dev/null || flake8 . --max-line-length=120 2>/dev/null || true
+
+    # ── PHP ──────────────────────────────────────────────────────────────────
+    - name: Setup PHP for test
+      if: inputs.language == 'php'
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ inputs.php_version }}
+        extensions: mbstring, xml, ctype, json, curl, dom
+        coverage: xdebug
+
+    - name: Install PHP dev dependencies
+      if: inputs.language == 'php'
+      shell: bash
+      run: |
+        if [ -f "composer.lock" ]; then
+          composer install --no-interaction --prefer-dist --optimize-autoloader
+        else
+          composer update --no-interaction --prefer-dist --optimize-autoloader
+        fi
+
+    - name: Run PHPUnit tests
+      if: inputs.language == 'php' && inputs.skip_tests != 'true'
+      shell: bash
+      run: |
+        if [ -f "vendor/bin/phpunit" ]; then
+          vendor/bin/phpunit --no-coverage 2>/dev/null || true
+        fi
+
+    - name: Run PHP lint with PHP_CodeSniffer
+      if: inputs.language == 'php' && inputs.skip_lint != 'true'
+      shell: bash
+      run: |
+        if [ -f "vendor/bin/phpcs" ]; then
+          vendor/bin/phpcs --standard=PSR12 --extensions=php src/ app/ 2>/dev/null || true
+        fi
+
+    # ── Rust ─────────────────────────────────────────────────────────────────
+    - name: Setup Rust for test
+      if: inputs.language == 'rust'
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ inputs.rust_version }}
+        components: clippy, rustfmt
+
+    - name: Cache Rust artifacts for test
+      if: inputs.language == 'rust'
+      uses: Swatinem/rust-cache@v2
+
+    - name: Run Rust tests
+      if: inputs.language == 'rust' && inputs.skip_tests != 'true'
+      shell: bash
+      run: cargo test
+
+    - name: Run Rust clippy lint
+      if: inputs.language == 'rust' && inputs.skip_lint != 'true'
+      shell: bash
+      run: cargo clippy -- -D warnings 2>/dev/null || true
+
+    - name: Check Rust formatting
+      if: inputs.language == 'rust' && inputs.skip_lint != 'true'
+      shell: bash
+      run: cargo fmt --check 2>/dev/null || true

@@ -1,0 +1,29 @@
+name: CI/CD with Overrides
+on:
+  push:
+    branches: [main, master, staging]
+  pull_request:
+
+jobs:
+  pipeline:
+    uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@master
+    secrets: inherit
+    with:
+      # Override deploy target directly (alternative: put these in .ci.yml)
+      deploy_target: docker-compose
+      deploy_host: app.example.com
+      deploy_user: ubuntu
+      deploy_path: /opt/myapp
+      deploy_port: "22"
+
+      # Docker registry (defaults to ghcr.io)
+      docker_registry: ghcr.io
+      docker_image: ghcr.io/myorg/myapp:latest
+
+      # Skip stages selectively
+      skip_security: false
+      skip_lint: false
+      skip_tests: false
+
+      # Language version overrides (auto-detected if omitted)
+      node_version: "20"
