@@ -74,7 +74,7 @@ runs:
           yarn install --frozen-lockfile
           yarn build --if-present 2>/dev/null || true
         else
-          npm ci --prefer-offline
+          npm ci --prefer-offline 2>/dev/null || npm install
           npm run build --if-present
         fi
 
