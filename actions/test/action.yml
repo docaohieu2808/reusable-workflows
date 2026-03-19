@@ -77,7 +77,7 @@ runs:
         elif [ -f "yarn.lock" ]; then
           yarn install --frozen-lockfile
         else
-          npm ci --prefer-offline
+          npm ci --prefer-offline 2>/dev/null || npm install
         fi
 
     - name: Run Node.js tests
