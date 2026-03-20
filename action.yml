@@ -1,0 +1,213 @@
+name: "Auto Pipeline — Zero Config CI/CD"
+description: "Auto-detect language, build, test, lint, and deploy any project. Supports Node.js, Java, Go, Python, PHP, Rust, .NET."
+author: "docaohieu2808"
+
+branding:
+  icon: zap
+  color: blue
+
+inputs:
+  # ── Language / Runtime ──────────────────────────────────────────────────────
+  language:
+    description: "Force language (node|java|go|python|php|rust|dotnet). Omit to auto-detect."
+    required: false
+    default: ""
+
+  node_version:
+    description: "Node.js version override (e.g. '20'). Ignored for non-Node projects."
+    required: false
+    default: ""
+
+  java_version:
+    description: "Java version (e.g. '21'). Ignored for non-Java projects."
+    required: false
+    default: "21"
+
+  go_version:
+    description: "Go version (e.g. '1.22'). Ignored for non-Go projects."
+    required: false
+    default: ""
+
+  python_version:
+    description: "Python version (e.g. '3.12'). Ignored for non-Python projects."
+    required: false
+    default: "3.12"
+
+  # ── Test ────────────────────────────────────────────────────────────────────
+  skip_tests:
+    description: "Skip running unit tests (lint still runs)."
+    required: false
+    default: "false"
+
+  skip_lint:
+    description: "Skip lint step entirely."
+    required: false
+    default: "false"
+
+  # ── Docker ──────────────────────────────────────────────────────────────────
+  docker_build_enabled:
+    description: "Build and push a Docker image after tests pass."
+    required: false
+    default: "false"
+
+  docker_image:
+    description: "Docker image name (e.g. ghcr.io/org/app). Required when docker_build_enabled=true."
+    required: false
+    default: ""
+
+  docker_tag:
+    description: "Docker image tag. Default: github.sha short."
+    required: false
+    default: ""
+
+  dockerfile_path:
+    description: "Path to Dockerfile."
+    required: false
+    default: "Dockerfile"
+
+  docker_registry:
+    description: "Docker registry host (e.g. ghcr.io). Default: ghcr.io."
+    required: false
+    default: "ghcr.io"
+
+  docker_registry_username:
+    description: "Registry username. Pass via secrets."
+    required: false
+    default: ""
+
+  docker_registry_password:
+    description: "Registry password/token. Pass via secrets."
+    required: false
+    default: ""
+
+  # ── Deploy ──────────────────────────────────────────────────────────────────
+  deploy_target:
+    description: |
+      Deploy target:
+        ssh-build | docker-compose | s3-cloudfront | rsync |
+        k8s | helm | vercel | netlify | fly-io | railway
+    required: false
+    default: ""
+
+  deploy_host:
+    description: "SSH hostname/IP (used by ssh-build, docker-compose, rsync)."
+    required: false
+    default: ""
+
+  deploy_user:
+    description: "SSH deploy user."
+    required: false
+    default: "deploy"
+
+  deploy_path:
+    description: "Remote deploy path."
+    required: false
+    default: "/opt/app"
+
+  deploy_port:
+    description: "SSH port."
+    required: false
+    default: "22"
+
+outputs:
+  language:
+    description: "Auto-detected (or forced) project language."
+    value: ${{ steps.detect.outputs.language }}
+
+  has_dockerfile:
+    description: "Whether a Dockerfile was found."
+    value: ${{ steps.detect.outputs.has_dockerfile }}
+
+  docker_image_tag:
+    description: "Full docker image:tag that was built and pushed."
+    value: ${{ steps.docker-meta.outputs.docker_image_tag }}
+
+runs:
+  using: composite
+  steps:
+    # ── 1. Detect ─────────────────────────────────────────────────────────────
+    - name: Detect language and project config
+      id: detect
+      uses: ./actions/detect
+
+    # ── 2. Override language if forced ───────────────────────────────────────
+    - name: Apply forced language override
+      id: resolve-language
+      shell: bash
+      run: |
+        FORCED="${{ inputs.language }}"
+        DETECTED="${{ steps.detect.outputs.language }}"
+        LANG="${FORCED:-$DETECTED}"
+        echo "language=$LANG" >> "$GITHUB_OUTPUT"
+        echo "[auto-pipeline] resolved language=$LANG (forced='$FORCED' detected='$DETECTED')"
+
+    # ── 3. Build ──────────────────────────────────────────────────────────────
+    - name: Build project
+      id: build
+      uses: ./actions/build
+      with:
+        language:       ${{ steps.resolve-language.outputs.language }}
+        node_version:   ${{ inputs.node_version }}
+        java_version:   ${{ inputs.java_version }}
+        go_version:     ${{ inputs.go_version }}
+        python_version: ${{ inputs.python_version }}
+
+    # ── 4. Test ───────────────────────────────────────────────────────────────
+    - name: Test project
+      id: test
+      uses: ./actions/test
+      with:
+        language:    ${{ steps.resolve-language.outputs.language }}
+        skip_tests:  ${{ inputs.skip_tests }}
+        skip_lint:   ${{ inputs.skip_lint }}
+
+    # ── 5. Docker build & push ────────────────────────────────────────────────
+    - name: Compute docker tag
+      id: docker-meta
+      if: ${{ inputs.docker_build_enabled == 'true' }}
+      shell: bash
+      run: |
+        TAG="${{ inputs.docker_tag }}"
+        if [ -z "$TAG" ]; then
+          TAG="${GITHUB_SHA::7}"
+        fi
+        IMAGE="${{ inputs.docker_image }}"
+        echo "docker_image_tag=${IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+    - name: Log in to Docker registry
+      if: ${{ inputs.docker_build_enabled == 'true' }}
+      shell: bash
+      run: |
+        echo "${{ inputs.docker_registry_password }}" | \
+          docker login "${{ inputs.docker_registry }}" \
+            -u "${{ inputs.docker_registry_username }}" --password-stdin
+
+    - name: Build and push Docker image
+      if: ${{ inputs.docker_build_enabled == 'true' }}
+      shell: bash
+      run: |
+        IMAGE="${{ inputs.docker_image }}"
+        TAG="${{ steps.docker-meta.outputs.tag }}"
+        docker build \
+          -f "${{ inputs.dockerfile_path }}" \
+          -t "${IMAGE}:${TAG}" \
+          -t "${IMAGE}:latest" \
+          .
+        docker push "${IMAGE}:${TAG}"
+        docker push "${IMAGE}:latest"
+        echo "[auto-pipeline] pushed ${IMAGE}:${TAG}"
+
+    # ── 6. Deploy ─────────────────────────────────────────────────────────────
+    - name: Deploy to target
+      id: deploy
+      if: ${{ inputs.deploy_target != '' }}
+      uses: ./actions/deploy
+      with:
+        deploy_target: ${{ inputs.deploy_target }}
+        deploy_host:   ${{ inputs.deploy_host }}
+        deploy_user:   ${{ inputs.deploy_user }}
+        deploy_path:   ${{ inputs.deploy_path }}
+        deploy_port:   ${{ inputs.deploy_port }}
+        docker_image:  ${{ inputs.docker_image }}
+        docker_tag:    ${{ steps.docker-meta.outputs.tag }}
