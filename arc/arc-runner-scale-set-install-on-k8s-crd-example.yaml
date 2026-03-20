@@ -1,0 +1,133 @@
+# GitHub Actions Level 5 — ARC Install Guide + RunnerScaleSet CRD Example
+# Actions Runner Controller (ARC) on K3s / K8s — full install walkthrough
+#
+# ── STEP 1: Add Helm repos ───────────────────────────────────────────────────
+#   helm repo add actions-runner-controller \
+#     https://actions-runner-controller.github.io/actions-runner-controller
+#   helm repo update
+#
+# ── STEP 2: Install ARC controller (arc-systems namespace) ───────────────────
+#   helm install arc \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set-controller \
+#     --namespace arc-systems \
+#     --create-namespace \
+#     --wait
+#
+# ── STEP 3: Create GitHub credentials Secret ─────────────────────────────────
+#   # Option A — GitHub App (recommended):
+#   kubectl create secret generic arc-github-app-secret \
+#     --namespace arc-runners \
+#     --from-literal=github_app_id=<APP_ID> \
+#     --from-literal=github_app_installation_id=<INSTALLATION_ID> \
+#     --from-file=github_app_private_key=<PATH_TO>.pem
+#
+#   # Option B — PAT:
+#   kubectl create secret generic arc-github-pat-secret \
+#     --namespace arc-runners \
+#     --from-literal=github_token=<PAT_TOKEN>
+#
+# ── STEP 4: Install runner scale set ─────────────────────────────────────────
+#   helm install arc-runner-set \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+#     --namespace arc-runners \
+#     --create-namespace \
+#     -f arc-runner-scale-set-helm-values-docaohieu2808.yaml
+#
+# ── STEP 5: Verify runners are registered ────────────────────────────────────
+#   kubectl get pods -n arc-runners
+#   kubectl get autoscalingrunnerset -n arc-runners
+#   kubectl get runners -n arc-runners
+#   # In GitHub: Settings → Actions → Runners → should show "k8s-runners-docaohieu2808"
+#
+# ── STEP 6: Use in a workflow ────────────────────────────────────────────────
+#   jobs:
+#     build:
+#       runs-on: k8s-runners-docaohieu2808   # matches runnerScaleSetName
+#
+# ── TROUBLESHOOTING ───────────────────────────────────────────────────────────
+#   kubectl logs -n arc-systems -l app.kubernetes.io/name=gha-runner-scale-set-controller
+#   kubectl logs -n arc-runners -l app.kubernetes.io/name=arc-runner-set
+#   kubectl describe autoscalingrunnerset -n arc-runners arc-runner-set
+# ─────────────────────────────────────────────────────────────────────────────
+
+---
+# ── AutoscalingRunnerSet CRD Example ─────────────────────────────────────────
+# This is the CRD that Helm installs via the gha-runner-scale-set chart.
+# Shown here for reference / GitOps tracking purposes.
+# Prefer managing via Helm values file rather than applying this directly.
+apiVersion: actions.github.com/v1alpha1
+kind: AutoscalingRunnerSet
+metadata:
+  name: arc-runner-set-docaohieu2808
+  namespace: arc-runners
+  labels:
+    app.kubernetes.io/name: arc-runner-set-docaohieu2808
+    app.kubernetes.io/part-of: actions-runner-controller
+    app.kubernetes.io/component: runner-scale-set
+  annotations:
+    description: "Self-hosted runner scale set for docaohieu2808 GitHub org on K3s"
+spec:
+  # GitHub org URL — runners register at org level (shared across all repos)
+  githubConfigUrl: "https://github.com/docaohieu2808"
+
+  # Reference to Secret containing GitHub App or PAT credentials
+  githubConfigSecret: arc-github-app-secret
+
+  # Name used as the `runs-on:` label value in GitHub Actions workflows
+  runnerScaleSetName: "k8s-runners-docaohieu2808"
+
+  # Autoscaling boundaries
+  minRunners: 1
+  maxRunners: 10
+
+  # Runner pod template
+  template:
+    spec:
+      securityContext:
+        fsGroup: 1001
+
+      initContainers: []
+
+      containers:
+        - name: runner
+          image: ghcr.io/actions/actions-runner:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/home/runner/run.sh"]
+
+          env:
+            - name: RUNNER_REGISTRATION_TIMEOUT
+              value: "60"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+
+          volumeMounts:
+            - name: work
+              mountPath: /home/runner/_work
+
+      volumes:
+        - name: work
+          emptyDir: {}
+
+---
+# ── EphemeralRunner reference (informational) ─────────────────────────────────
+# ARC creates EphemeralRunner objects per job automatically — do not create manually.
+# Each EphemeralRunner maps to one GitHub Actions job execution.
+# apiVersion: actions.github.com/v1alpha1
+# kind: EphemeralRunner
+# metadata:
+#   name: arc-runner-set-docaohieu2808-<job-id>
+#   namespace: arc-runners
+# spec:
+#   githubConfigUrl: "https://github.com/docaohieu2808"
+#   githubConfigSecret: arc-github-app-secret
+#   runnerScaleSetId: <auto-assigned>

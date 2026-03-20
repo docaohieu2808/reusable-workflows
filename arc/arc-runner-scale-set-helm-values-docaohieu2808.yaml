@@ -1,0 +1,138 @@
+# GitHub Actions Level 5 — Actions Runner Controller (ARC) Helm Values
+# Runner Scale Set targeting docaohieu2808 GitHub org repos
+#
+# PREREQUISITES:
+#   1. Install ARC controller chart first (see arc-install-runner-on-k8s-guide.yaml)
+#   2. Create GitHub PAT or GitHub App credentials (see AUTHENTICATION below)
+#   3. Replace all {{PLACEHOLDER}} values
+#
+# INSTALL RUNNER SCALE SET:
+#   helm install arc-runner-set \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+#     --namespace arc-runners \
+#     --create-namespace \
+#     -f arc-runner-scale-set-helm-values-docaohieu2808.yaml
+#
+# UPGRADE:
+#   helm upgrade arc-runner-set \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+#     --namespace arc-runners \
+#     -f arc-runner-scale-set-helm-values-docaohieu2808.yaml
+#
+# VERIFY:
+#   kubectl get pods -n arc-runners -w
+#   kubectl get runners -n arc-runners
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── GitHub Target ─────────────────────────────────────────────────────────────
+# Scope: org-level runners are shared across all repos in docaohieu2808
+githubConfigUrl: "https://github.com/docaohieu2808"
+
+# ── AUTHENTICATION ────────────────────────────────────────────────────────────
+# Option A: GitHub App (recommended for production — no token expiry)
+#   1. Create GitHub App at: https://github.com/organizations/docaohieu2808/settings/apps
+#   2. Grant permissions: Actions (read/write), Administration (read/write)
+#   3. Install App on org, note: App ID, Installation ID, private key
+githubConfigSecret:
+  # Use existing Secret (pre-created with credentials) — preferred approach
+  # Create with:
+  #   kubectl create secret generic arc-github-app-secret \
+  #     --namespace arc-runners \
+  #     --from-literal=github_app_id={{GITHUB_APP_ID}} \
+  #     --from-literal=github_app_installation_id={{GITHUB_APP_INSTALLATION_ID}} \
+  #     --from-file=github_app_private_key={{PATH_TO_PRIVATE_KEY_PEM}}
+  name: "arc-github-app-secret"   # pre-created Secret name
+
+# Option B: PAT (simpler, rotate every 90 days)
+# githubConfigSecret:
+#   name: "arc-github-pat-secret"
+#   # kubectl create secret generic arc-github-pat-secret \
+#   #   --namespace arc-runners \
+#   #   --from-literal=github_token={{GITHUB_PAT}}
+
+# ── Runner Scale Set ──────────────────────────────────────────────────────────
+# Name used as `runs-on` label in GitHub Actions workflows:
+#   jobs:
+#     build:
+#       runs-on: k8s-runners-docaohieu2808
+runnerScaleSetName: "k8s-runners-docaohieu2808"
+
+# ── Autoscaling ───────────────────────────────────────────────────────────────
+minRunners: 1       # Keep 1 warm runner to avoid cold-start delay
+maxRunners: 10      # Cap to prevent runaway resource consumption
+
+# ── Runner Pod Template ───────────────────────────────────────────────────────
+template:
+  spec:
+    # Use dedicated node pool if available (optional)
+    # nodeSelector:
+    #   kubernetes.io/role: ci-runner
+
+    # Tolerate CI runner taint if nodes are dedicated
+    # tolerations:
+    #   - key: dedicated
+    #     operator: Equal
+    #     value: ci-runner
+    #     effect: NoSchedule
+
+    securityContext:
+      fsGroup: 1001
+
+    containers:
+      - name: runner
+        # Official ARC runner image — includes common CI tools
+        image: ghcr.io/actions/actions-runner:latest
+        imagePullPolicy: IfNotPresent
+
+        env:
+          # Increase runner registration timeout for slow clusters
+          - name: RUNNER_REGISTRATION_TIMEOUT
+            value: "60"
+          # Expose node name for debugging
+          - name: NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+
+        # Ephemeral runner workspace — cleaned between jobs
+        volumeMounts:
+          - name: work
+            mountPath: /home/runner/_work
+
+    volumes:
+      - name: work
+        emptyDir: {}
+
+# ── Controller Namespace Reference ───────────────────────────────────────────
+# Must match the namespace where ARC controller chart was installed
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-runner-set-controller
+
+# ── Docker-in-Docker (DinD) — optional ───────────────────────────────────────
+# Enable if workflows need to build Docker images inside the runner
+# Requires privileged pods — evaluate security implications first
+containerMode:
+  type: "dind"          # options: dind | kubernetes
+  # type: "kubernetes"  # use K8s-native container execution (more secure)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+listenerTemplate:
+  spec:
+    containers:
+      - name: listener
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
