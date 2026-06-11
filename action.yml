@@ -128,7 +128,7 @@ runs:
     # ── 1. Detect ─────────────────────────────────────────────────────────────
     - name: Detect language and project config
       id: detect
-      uses: ./actions/detect
+      uses: docaohieu2808/reusable-workflows/actions/detect@master
 
     # ── 2. Override language if forced ───────────────────────────────────────
     - name: Apply forced language override
@@ -144,7 +144,7 @@ runs:
     # ── 3. Build ──────────────────────────────────────────────────────────────
     - name: Build project
       id: build
-      uses: ./actions/build
+      uses: docaohieu2808/reusable-workflows/actions/build@master
       with:
         language:       ${{ steps.resolve-language.outputs.language }}
         node_version:   ${{ inputs.node_version }}
@@ -155,7 +155,7 @@ runs:
     # ── 4. Test ───────────────────────────────────────────────────────────────
     - name: Test project
       id: test
-      uses: ./actions/test
+      uses: docaohieu2808/reusable-workflows/actions/test@master
       with:
         language:    ${{ steps.resolve-language.outputs.language }}
         skip_tests:  ${{ inputs.skip_tests }}
@@ -202,7 +202,7 @@ runs:
     - name: Deploy to target
       id: deploy
       if: ${{ inputs.deploy_target != '' }}
-      uses: ./actions/deploy
+      uses: docaohieu2808/reusable-workflows/actions/deploy@master
       with:
         deploy_target: ${{ inputs.deploy_target }}
         deploy_host:   ${{ inputs.deploy_host }}

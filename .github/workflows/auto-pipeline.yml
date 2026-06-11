@@ -23,6 +23,63 @@ on:
         type: string
         required: false
         default: "3.12"
+      skip_tests:
+        description: "Skip running unit tests"
+        type: string
+        required: false
+        default: "false"
+      skip_lint:
+        description: "Skip lint step"
+        type: string
+        required: false
+        default: "false"
+      skip_security:
+        description: "Skip security scan step"
+        type: boolean
+        required: false
+        default: false
+      deploy_target:
+        description: "Deploy target (ssh-build|docker-compose|s3-cloudfront|rsync|k8s|helm|vercel|netlify|fly-io|railway)"
+        type: string
+        required: false
+        default: ""
+      deploy_host:
+        description: "SSH hostname/IP for ssh-based deploy targets"
+        type: string
+        required: false
+        default: ""
+      deploy_user:
+        description: "SSH deploy user"
+        type: string
+        required: false
+        default: "deploy"
+      deploy_path:
+        description: "Remote deploy path"
+        type: string
+        required: false
+        default: "/opt/app"
+      deploy_port:
+        description: "SSH port"
+        type: string
+        required: false
+        default: "22"
+      docker_registry:
+        description: "Docker registry host (e.g. ghcr.io)"
+        type: string
+        required: false
+        default: "ghcr.io"
+      docker_image:
+        description: "Docker image name (e.g. ghcr.io/org/app)"
+        type: string
+        required: false
+        default: ""
+    secrets:
+      SSH_PRIVATE_KEY:
+        description: "SSH private key for deploy"
+        required: false
+      DOCKER_REGISTRY_PASSWORD:
+        description: "Docker registry password/token"
+        required: false
 
 jobs:
   detect:
@@ -123,11 +180,12 @@ jobs:
     name: Security Scan
     needs: [detect, build]
     runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_security }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -147,3 +205,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         continue-on-error: true
+
+  deploy:
+    name: Deploy
+    needs: [detect, build, test]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.deploy_target != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+        continue-on-error: true
+
+      - name: Deploy to target
+        uses: docaohieu2808/reusable-workflows/actions/deploy@master
+        with:
+          deploy_target: ${{ inputs.deploy_target }}
+          deploy_host:   ${{ inputs.deploy_host }}
+          deploy_user:   ${{ inputs.deploy_user }}
+          deploy_path:   ${{ inputs.deploy_path }}
+          deploy_port:   ${{ inputs.deploy_port }}
+          docker_image:  ${{ inputs.docker_image }}
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DOCKER_REGISTRY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}

@@ -7,7 +7,9 @@ on:
 jobs:
   pipeline:
     uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@master
-    secrets: inherit
+    secrets:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      DOCKER_REGISTRY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
     with:
       # Override deploy target directly (alternative: put these in .ci.yml)
       deploy_target: docker-compose
