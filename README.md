@@ -19,7 +19,7 @@ permissions:
   contents: read
 jobs:
   pipeline:
-    uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@<commit-sha> # v2.0.0
+    uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@8ba3a42948ae42fd413647765bdf124c82bb8479 # v2.0.0
 ```
 
 That is the whole file for most repositories. Pin a commit SHA, not a tag or branch: a SHA cannot be moved under
