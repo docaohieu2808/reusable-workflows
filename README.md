@@ -86,7 +86,9 @@ outputs. The logic lives in `scripts/`, so the workflow and the actions run the 
   an upstream release cannot change the result on its own.
 - **Deploys check the host key** against `SSH_KNOWN_HOSTS` instead of trusting whatever answers, take the image by
   digest, run one at a time per environment, and pass registry passwords on stdin, not on a command line.
-- **Least privilege:** the workflow token is read-only except for the image job.
+- **Least privilege:** every job reads only, except the image job, which uses what the caller grants (add
+  `packages: write` only when pushing). The self-test calls the pipeline both ways, so a job that asks for more
+  than a read-only caller gives fails here first.
 
 ## Self-hosted runners on Kubernetes
 

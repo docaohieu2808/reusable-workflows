@@ -113,6 +113,17 @@ jobs:
     with:
       working_directory: tests/fixtures/node
       image: ghcr.io/${{ github.repository }}/fixture-node
+      # Pushes only on pushes to the default branch, which proves the push path with the caller's token.
+      push_image: true
+
+  # The way most repositories call it: read-only token, nothing pushed. A job inside the pipeline that asked for
+  # more permissions than this would fail at startup, which the full-permission call above cannot catch.
+  pipeline-read-only:
+    uses: ./.github/workflows/auto-pipeline.yml
+    permissions:
+      contents: read
+    with:
+      working_directory: tests/fixtures/node
 
   deploy:
     runs-on: ubuntu-24.04

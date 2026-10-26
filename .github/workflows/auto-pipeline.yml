@@ -104,13 +104,14 @@ on:
         description: The pushed image by digest, empty when nothing was pushed
         value: ${{ jobs.docker.outputs.image }}
 
-permissions:
-  contents: read
-
+# No workflow-level permissions: they would cap every job, including the image push. Each job below that needs
+# only to read says so; the image job runs with whatever the caller grants.
 jobs:
   detect:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
     outputs:
       language: ${{ steps.detect.outputs.language }}
       package_manager: ${{ steps.detect.outputs.package_manager }}
@@ -135,6 +136,8 @@ jobs:
     needs: detect
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -177,6 +180,8 @@ jobs:
     if: ${{ !inputs.skip_security }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -206,9 +211,8 @@ jobs:
       && (needs.security.result == 'success' || needs.security.result == 'skipped') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
+    # No job-level permissions on purpose: a called workflow may not ask for more than its caller grants, so
+    # this job runs with the caller's token. Callers that set push_image grant packages: write.
     outputs:
       image: ${{ steps.result.outputs.image }}
       registry: ${{ steps.name.outputs.registry }}
@@ -264,6 +268,8 @@ jobs:
     if: ${{ inputs.deploy && needs.docker.outputs.image != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
     environment: ${{ inputs.environment }}
     # One deploy at a time per environment; a newer one waits instead of cancelling a deploy halfway.
     concurrency:
