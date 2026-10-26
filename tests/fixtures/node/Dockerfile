@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:24.22.1-alpine3.24
+FROM node:26.12.1-alpine3.24
 WORKDIR /app
 COPY package.json index.js ./
 USER node
