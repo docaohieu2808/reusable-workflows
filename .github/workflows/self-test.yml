@@ -14,6 +14,25 @@ jobs:
           bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
           ./actionlint -color
 
+  pinned-actions:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every action pinned by SHA points at a real commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A pin must be a commit. An annotated tag object's SHA looks the same but fails when the job runs.
+          grep -rhoE 'uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}' .github action.yml actions \
+            | sed -E 's/uses: *//' | sort -u | while IFS=@ read -r ref sha; do
+              repo=$(echo "$ref" | cut -d/ -f1-2)
+              if gh api "repos/$repo/commits/$sha" --jq .sha >/dev/null 2>&1; then
+                echo "ok   $ref@$sha"
+              else
+                echo "FAIL $ref@$sha is not a commit"; exit 1
+              fi
+            done
+
   node-project:
     runs-on: ubuntu-24.04
     steps:
