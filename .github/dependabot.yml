@@ -12,3 +12,8 @@ updates:
     directory: /tests/fixtures/node
     schedule:
       interval: weekly
+    # Stay on the Node major the pipeline defaults to (the current LTS); moving to the next LTS is a decision,
+    # not a weekly bump.
+    ignore:
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

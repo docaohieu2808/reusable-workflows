@@ -36,7 +36,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # An annotated tag object's SHA looks like a commit SHA but fails when a job runs, so ask the API.
-          refs=$(grep -rhoE 'uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[^ ]+' .github actions | sed -E 's/uses: *//' | sort -u)
+          # Only real `uses:` keys, not usage examples in comments.
+          refs=$(grep -rhE '^[[:space:]]*(- )?uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@' .github actions \
+            | sed -E 's/^[[:space:]]*(- )?uses: *//; s/[[:space:]].*$//' | sort -u)
           status=0
           while IFS=@ read -r ref sha; do
             repo=$(echo "$ref" | cut -d/ -f1-2)
