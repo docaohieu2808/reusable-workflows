@@ -1,0 +1,95 @@
+name: Set up toolchain
+description: Install the language toolchain (with dependency caching) for a detected project.
+inputs:
+  working-directory:
+    description: Project directory, relative to the repository root
+    default: "."
+  language:
+    description: node, python, go, java, php or rust (from the detect action)
+    required: true
+  package_manager:
+    description: From the detect action
+    default: ""
+  node-version:
+    description: Node.js version (ignored when the project has an .nvmrc or .node-version)
+    default: "24"
+  python-version:
+    description: Python version
+    default: "3.14"
+  go-version:
+    description: Go version (ignored when go.mod names one)
+    default: "stable"
+  java-version:
+    description: Java version (Eclipse Temurin)
+    default: "25"
+  php-version:
+    description: PHP version
+    default: "8.5"
+runs:
+  using: composite
+  steps:
+    - name: Pick the Node version file
+      if: inputs.language == 'node'
+      id: node
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        WD: ${{ inputs.working-directory }}
+      run: |
+        file=""
+        for f in .nvmrc .node-version; do
+          if [ -f "$f" ]; then file="$WD/$f"; break; fi
+        done
+        echo "file=$file" >> "$GITHUB_OUTPUT"
+    - if: inputs.language == 'node' && inputs.package_manager == 'pnpm'
+      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      with:
+        package_json_file: ${{ inputs.working-directory }}/package.json
+    - if: inputs.language == 'node'
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ steps.node.outputs.file == '' && inputs.node-version || '' }}
+        node-version-file: ${{ steps.node.outputs.file }}
+    - if: inputs.language == 'node' && inputs.package_manager == 'yarn'
+      shell: bash
+      run: npm install --global corepack@latest && corepack enable
+    - if: inputs.language == 'python'
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Pick the Go version source
+      if: inputs.language == 'go'
+      id: go
+      shell: bash
+      env:
+        WD: ${{ inputs.working-directory }}
+      run: |
+        if grep -qE '^(go|toolchain) ' "$WD/go.mod"; then echo "file=$WD/go.mod" >> "$GITHUB_OUTPUT"; fi
+    - if: inputs.language == 'go'
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ steps.go.outputs.file == '' && inputs.go-version || '' }}
+        go-version-file: ${{ steps.go.outputs.file }}
+        cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+    - if: inputs.language == 'java'
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: ${{ inputs.package_manager }}
+        cache-dependency-path: ${{ inputs.package_manager == 'maven' && format('{0}/pom.xml', inputs.working-directory) || format('{0}/**/*.gradle*', inputs.working-directory) }}
+    - if: inputs.language == 'php'
+      uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+      with:
+        php-version: ${{ inputs.php-version }}
+        tools: composer
+        coverage: none
+    - if: inputs.language == 'rust'
+      uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+      with:
+        toolchain: stable
+        components: clippy, rustfmt
+    - if: inputs.language == 'rust'
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        workspaces: ${{ inputs.working-directory }}

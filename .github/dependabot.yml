@@ -1,0 +1,14 @@
+# Keeps every pinned action and the fixture's base image current. Pins stay SHAs; Dependabot moves them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/actions/*"]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /tests/fixtures/node
+    schedule:
+      interval: weekly

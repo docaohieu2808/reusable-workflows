@@ -1,0 +1,6 @@
+paths:
+  .github/workflows/auto-pipeline.yml:
+    ignore:
+      # job.workflow_repository and job.workflow_sha were added to GitHub Actions in April 2026 and actionlint
+      # 1.7.12 does not know them yet. Drop this when actionlint learns them.
+      - 'property "workflow_(repository|sha)" is not defined in object type'

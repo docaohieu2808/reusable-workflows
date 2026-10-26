@@ -1,57 +1,151 @@
-# Checks this repository on every push: the workflows lint clean, and the composite actions detect, build and
-# test a real (tiny) Node project end to end.
+# Proves the pipeline does what the README says, on every push and once a week (so a new toolchain or action
+# release that breaks it shows up here, not in a caller's repository):
+# - lint: actionlint on the workflows, shellcheck on the scripts, every action pinned to a real commit;
+# - languages: for each of the six stacks, detect, set up, build, lint and test a tiny project, then run the
+#   tests again with one forced failure and require the step to FAIL (a pipeline that cannot go red is useless);
+# - pipeline: run the reusable workflow itself end to end on the Node project, including the image build;
+# - deploy: deploy an image over SSH to a Docker Compose project on the runner and check the app answers.
 name: self-test
 on:
   push:
   pull_request:
-jobs:
-  actionlint:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: actionlint
-        run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
-          ./actionlint -color
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
 
-  pinned-actions:
+permissions:
+  contents: read
+
+jobs:
+  lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Every action pinned by SHA points at a real commit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          ./actionlint -color
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+      - name: Every action is pinned to a commit SHA that exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A pin must be a commit. An annotated tag object's SHA looks the same but fails when the job runs.
-          grep -rhoE 'uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}' .github action.yml actions \
-            | sed -E 's/uses: *//' | sort -u | while IFS=@ read -r ref sha; do
-              repo=$(echo "$ref" | cut -d/ -f1-2)
-              if gh api "repos/$repo/commits/$sha" --jq .sha >/dev/null 2>&1; then
-                echo "ok   $ref@$sha"
-              else
-                echo "FAIL $ref@$sha is not a commit"; exit 1
-              fi
-            done
+          # An annotated tag object's SHA looks like a commit SHA but fails when a job runs, so ask the API.
+          refs=$(grep -rhoE 'uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[^ ]+' .github actions | sed -E 's/uses: *//' | sort -u)
+          status=0
+          while IFS=@ read -r ref sha; do
+            repo=$(echo "$ref" | cut -d/ -f1-2)
+            if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then echo "FAIL $ref@$sha is not pinned to a SHA"; status=1
+            elif gh api "repos/$repo/commits/$sha" --jq .sha >/dev/null 2>&1; then echo "ok   $ref@$sha"
+            else echo "FAIL $ref@$sha is not a commit"; status=1; fi
+          done <<< "$refs"
+          exit "$status"
 
-  node-project:
+  languages:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [node, python, go, java, php, rust]
+    env:
+      PROJECT: tests/fixtures/${{ matrix.language }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: detect
+        uses: ./actions/detect
+        with:
+          working-directory: ${{ env.PROJECT }}
+      - name: Detected the right language
+        env:
+          GOT: ${{ steps.detect.outputs.language }}
+          WANT: ${{ matrix.language }}
+        run: test "$GOT" = "$WANT" || { echo "detected $GOT, want $WANT"; exit 1; }
+      - uses: ./actions/setup
+        with:
+          working-directory: ${{ env.PROJECT }}
+          language: ${{ steps.detect.outputs.language }}
+          package_manager: ${{ steps.detect.outputs.package_manager }}
+      - uses: ./actions/build
+        with:
+          working-directory: ${{ env.PROJECT }}
+          language: ${{ steps.detect.outputs.language }}
+          package_manager: ${{ steps.detect.outputs.package_manager }}
+      - uses: ./actions/lint
+        with:
+          working-directory: ${{ env.PROJECT }}
+          language: ${{ steps.detect.outputs.language }}
+          package_manager: ${{ steps.detect.outputs.package_manager }}
+      - uses: ./actions/test
+        with:
+          working-directory: ${{ env.PROJECT }}
+          language: ${{ steps.detect.outputs.language }}
+          package_manager: ${{ steps.detect.outputs.package_manager }}
+      - name: Tests again, with one forced failure
+        id: failing
+        continue-on-error: true
+        uses: ./actions/test
+        env:
+          FIXTURE_FAIL: "1"
+        with:
+          working-directory: ${{ env.PROJECT }}
+          language: ${{ steps.detect.outputs.language }}
+          package_manager: ${{ steps.detect.outputs.package_manager }}
+      - name: The forced failure must fail the step
+        env:
+          OUTCOME: ${{ steps.failing.outcome }}
+        run: |
+          test "$OUTCOME" = failure || { echo "a failing test did not fail the step (outcome $OUTCOME)"; exit 1; }
+
+  pipeline:
+    uses: ./.github/workflows/auto-pipeline.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      working_directory: tests/fixtures/node
+      image: ghcr.io/${{ github.repository }}/fixture-node
+
+  deploy:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Use the Node fixture as the project root
-        run: cp -r tests/fixtures/node/. .
-      - name: Detect
-        id: detect
-        uses: ./actions/detect
-      - name: Detected language must be node
-        run: test "${{ steps.detect.outputs.language }}" = node
-      - name: Build
-        uses: ./actions/build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          language: node
-          node_version: "22"
-      - name: Test
-        uses: ./actions/test
+          persist-credentials: false
+      # The key pair is throwaway: made here, trusted only by this runner, gone when the job ends.
+      - name: Make the runner an SSH deploy target with a Compose project
+        id: target
+        run: |
+          sudo apt-get install -y --no-install-recommends openssh-server >/dev/null
+          sudo systemctl start ssh
+          ssh-keygen -t ed25519 -N "" -f "$RUNNER_TEMP/deploy_key" -q
+          mkdir -p ~/.ssh && cat "$RUNNER_TEMP/deploy_key.pub" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+          mkdir -p "$RUNNER_TEMP/app"
+          cat > "$RUNNER_TEMP/app/compose.yaml" <<'YAML'
+          services:
+            app:
+              image: ${IMAGE}
+              ports: ["127.0.0.1:3000:3000"]
+          YAML
+          docker build -t fixture-node:e2e tests/fixtures/node
+          {
+            echo "known_hosts<<EOF"; ssh-keyscan -t ed25519 127.0.0.1 2>/dev/null; echo "EOF"
+            echo "key<<EOF"; cat "$RUNNER_TEMP/deploy_key"; echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: ./actions/deploy
         with:
-          language: node
-          node_version: "22"
-          skip_lint: "true"
+          host: 127.0.0.1
+          user: runner
+          path: ${{ runner.temp }}/app
+          image: fixture-node:e2e
+        env:
+          SSH_PRIVATE_KEY: ${{ steps.target.outputs.key }}
+          SSH_KNOWN_HOSTS: ${{ steps.target.outputs.known_hosts }}
+      - name: The deployed app answers
+        run: test "$(curl -fsS http://127.0.0.1:3000/)" = ok

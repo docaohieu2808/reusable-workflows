@@ -1,0 +1,26 @@
+# Push the image to ghcr.io on the default branch and deploy it to a Docker Compose host over SSH.
+# On the host, /opt/app/compose.yaml refers to the image as ${IMAGE}. Add required reviewers to the
+# "production" environment in the repository settings to gate each deploy behind an approval.
+name: CI/CD
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  pipeline:
+    uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@PIPELINE_SHA # v2.0.0
+    permissions:
+      contents: read
+      packages: write
+    with:
+      push_image: true
+      deploy: true
+      deploy_host: app.example.com
+      deploy_user: deploy
+      deploy_path: /opt/app
+    secrets:
+      SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}   # ssh-keyscan app.example.com, checked by hand
+      DEPLOY_REGISTRY_USERNAME: ${{ github.actor }}               # lets the host pull a private image
+      DEPLOY_REGISTRY_PASSWORD: ${{ secrets.GHCR_READ_TOKEN }}    # a token with read:packages only

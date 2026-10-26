@@ -1,8 +1,11 @@
-name: CI/CD
-on: [push, pull_request]
+# The whole CI for most repositories: detect, build, lint, test, scan, and build the image if there is a
+# Dockerfile. Nothing is pushed or deployed.
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
 jobs:
   pipeline:
-    uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@master
-    secrets:
-      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-      DOCKER_REGISTRY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_PASSWORD }}
+    uses: docaohieu2808/reusable-workflows/.github/workflows/auto-pipeline.yml@PIPELINE_SHA # v2.0.0
