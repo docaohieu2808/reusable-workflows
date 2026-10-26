@@ -1,0 +1,9 @@
+{
+  "name": "reusable-workflows-node-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"require('fs').mkdirSync('dist',{recursive:true});require('fs').copyFileSync('index.js','dist/index.js')\"",
+    "test": "node --test"
+  }
+}

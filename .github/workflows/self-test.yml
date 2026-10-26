@@ -1,0 +1,38 @@
+# Checks this repository on every push: the workflows lint clean, and the composite actions detect, build and
+# test a real (tiny) Node project end to end.
+name: self-test
+on:
+  push:
+  pull_request:
+jobs:
+  actionlint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
+
+  node-project:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use the Node fixture as the project root
+        run: cp -r tests/fixtures/node/. .
+      - name: Detect
+        id: detect
+        uses: ./actions/detect
+      - name: Detected language must be node
+        run: test "${{ steps.detect.outputs.language }}" = node
+      - name: Build
+        uses: ./actions/build
+        with:
+          language: node
+          node_version: "22"
+      - name: Test
+        uses: ./actions/test
+        with:
+          language: node
+          node_version: "22"
+          skip_lint: "true"
