@@ -6,8 +6,10 @@ Zero-config CI/CD for GitHub Actions. It detects the stack (Node, Python, Go, Ja
 builds, lints, tests, scans for vulnerable dependencies and committed secrets, builds the Docker image when there
 is a Dockerfile, and can push it and deploy it with Docker Compose over SSH.
 
-Everything the README claims is exercised by [`self-test`](.github/workflows/self-test.yml) on every push and
-once a week, so a new toolchain or action release that breaks the pipeline shows up here first.
+The behaviour described here is exercised by [`self-test`](.github/workflows/self-test.yml) on every push and
+once a week, including the failure cases: a failing test, a known-vulnerable dependency and a leaked token must each
+turn it red. The deploy step is tested end to end through `actions/deploy`; the workflow's deploy job itself needs a
+real host and is not run, so a new toolchain or action release that breaks the pipeline shows up here first.
 
 ## Use it
 
@@ -70,7 +72,7 @@ token); `REGISTRY_USERNAME`/`REGISTRY_PASSWORD` to push to a registry other than
 
 ## Using the actions directly
 
-`actions/detect`, `setup`, `build`, `lint`, `test` and `deploy` can be used one by one in your own job; each takes
+`actions/detect`, `setup`, `build`, `lint`, `test`, `scan` and `deploy` can be used one by one in your own job; each takes
 `working-directory`, and the build, lint and test steps take the `language` and `package_manager` that detect
 outputs. The logic lives in `scripts/`, so the workflow and the actions run the same code.
 

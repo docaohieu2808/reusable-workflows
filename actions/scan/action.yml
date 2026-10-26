@@ -1,0 +1,31 @@
+name: Security scan
+description: >-
+  Fail on secrets in the working tree (gitleaks) and on fixable HIGH or CRITICAL vulnerabilities in the
+  project's dependencies (Trivy). Run it before anything downloads large files into the workspace.
+inputs:
+  working-directory:
+    description: Project directory whose dependencies are scanned, relative to the repository root
+    default: "."
+  secrets-path:
+    description: Directory scanned for secrets (the whole checkout by default)
+    default: "."
+runs:
+  using: composite
+  steps:
+    # Runs before Trivy, which downloads its vulnerability database into the workspace.
+    - name: Secrets in the working tree
+      shell: bash
+      env:
+        GITLEAKS_IMAGE: zricethezav/gitleaks:v8.30.1
+        SCAN_PATH: ${{ inputs.secrets-path }}
+      run: timeout 300 docker run --rm -v "$(realpath "$SCAN_PATH"):/repo:ro" "$GITLEAKS_IMAGE" dir /repo --redact --no-banner
+    # Pinned to a commit: on 2026-03-19 this action's tags were force-pushed to credential-stealing code
+    # (CVE-2026-33634). A commit SHA cannot be moved that way.
+    - name: Vulnerabilities in dependencies (fixable HIGH or CRITICAL)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        scan-type: fs
+        scan-ref: ${{ inputs.working-directory }}
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        exit-code: "1"

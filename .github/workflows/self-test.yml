@@ -105,6 +105,49 @@ jobs:
         run: |
           test "$OUTCOME" = failure || { echo "a failing test did not fail the step (outcome $OUTCOME)"; exit 1; }
 
+  # The scan the pipeline runs must pass a clean project and FAIL a vulnerable one and a leaked secret. The bad
+  # inputs are generated here at run time, so the repository itself never contains them.
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Clean project passes
+        uses: ./actions/scan
+        with:
+          working-directory: tests/fixtures/node
+          secrets-path: tests/fixtures/node
+      - name: Make a project with a known-vulnerable dependency, and a directory with a leaked key
+        run: |
+          mkdir -p vulnerable-project leak-dir
+          # lodash 4.17.20: CVE-2021-23337 (command injection, HIGH), fixed in 4.17.21.
+          (cd vulnerable-project && npm init -y >/dev/null && npm install --package-lock-only --no-audit --no-fund lodash@4.17.20 >/dev/null)
+          # A syntactically valid but fake GitHub token, made at run time so it never lands in git.
+          printf 'GITHUB_TOKEN=ghp_%s\n' "$(head -c 400 /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 36)" > leak-dir/.env
+      - name: Vulnerable dependency must fail the scan
+        id: vulnerable
+        continue-on-error: true
+        uses: ./actions/scan
+        with:
+          working-directory: vulnerable-project
+          secrets-path: tests/fixtures/node
+      - name: Leaked secret must fail the scan
+        id: leak
+        continue-on-error: true
+        uses: ./actions/scan
+        with:
+          working-directory: tests/fixtures/node
+          secrets-path: leak-dir
+      - name: Both bad inputs failed
+        env:
+          VULN: ${{ steps.vulnerable.outcome }}
+          LEAK: ${{ steps.leak.outcome }}
+        run: |
+          test "$VULN" = failure || { echo "Trivy passed a known-vulnerable dependency ($VULN)"; exit 1; }
+          test "$LEAK" = failure || { echo "gitleaks passed a leaked token ($LEAK)"; exit 1; }
+
   pipeline:
     uses: ./.github/workflows/auto-pipeline.yml
     permissions:
