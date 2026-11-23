@@ -42,7 +42,7 @@ runs:
         done
         echo "file=$file" >> "$GITHUB_OUTPUT"
     - if: inputs.language == 'node' && inputs.package_manager == 'pnpm'
-      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       with:
         package_json_file: ${{ inputs.working-directory }}/package.json
     - if: inputs.language == 'node'
@@ -66,13 +66,13 @@ runs:
       run: |
         if grep -qE '^(go|toolchain) ' "$WD/go.mod"; then echo "file=$WD/go.mod" >> "$GITHUB_OUTPUT"; fi
     - if: inputs.language == 'go'
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
       with:
         go-version: ${{ steps.go.outputs.file == '' && inputs.go-version || '' }}
         go-version-file: ${{ steps.go.outputs.file }}
         cache-dependency-path: ${{ inputs.working-directory }}/go.sum
     - if: inputs.language == 'java'
-      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
       with:
         distribution: temurin
         java-version: ${{ inputs.java-version }}
